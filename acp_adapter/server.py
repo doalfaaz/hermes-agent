@@ -904,13 +904,20 @@ class HermesACPAgent(SlashCommandsMixin, acp.Agent):
             except Exception:
                 logger.debug("Could not emit ACP provenance update after rotation for %s", session_id, exc_info=True)
 
-        final_response = result.get("final_response", "")
+        # ``final_response`` is None on interrupted turns that produced no text (stop-gate
+        # cleared the candidate, or the cancel landed mid tool-call); coerce so the
+        # startswith() suppression below cannot raise on the JSON-RPC boundary.
+        final_response = result.get("final_response") or ""
         cancelled = bool(state.cancel_event and state.cancel_event.is_set())
         # The local "waiting for model" interrupt status is metadata, not prose; stop_reason carries it.
         from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
 
         interrupted = bool(result.get("interrupted")) or cancelled
-        suppress = interrupted and final_response.startswith(INTERRUPT_WAITING_FOR_MODEL_PREFIX)
+        suppress = (
+            interrupted
+            and isinstance(final_response, str)
+            and final_response.startswith(INTERRUPT_WAITING_FOR_MODEL_PREFIX)
+        )
         # Send the final text unless already streamed — or if a plugin hook transformed it after.
         if final_response and conn and not suppress and (not streamed_message or result.get("response_transformed")):
             update = acp.update_agent_message_text(final_response)

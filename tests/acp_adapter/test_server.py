@@ -464,6 +464,57 @@ class TestPrompt:
 
         assert state.history == []
 
+    @pytest.mark.asyncio
+    async def test_prompt_interrupted_none_final_response_returns_cancelled(self, agent, mock_manager):
+        """A ``session/cancel`` landing mid-turn finalizes with ``interrupted=True`` and
+        ``final_response=None`` (no text produced, or a stop-gate cleared the candidate).
+        ``_finish_turn`` must not raise ``AttributeError`` on ``None.startswith`` and the
+        prompt must resolve ``stop_reason="cancelled"`` rather than a JSON-RPC error."""
+        resp = await agent.new_session(cwd=".")
+        state = mock_manager.get_session(resp.session_id)
+
+        def _run(*args, **kwargs):
+            state.cancel_event.set()  # session/cancel lands while the turn is running
+            return {"final_response": None, "interrupted": True, "messages": []}
+
+        state.agent.run_conversation = _run
+        state.agent.model = "test-model"
+        state.agent.provider = "openrouter"
+        mock_conn = MagicMock(spec=acp.Client)
+        mock_conn.session_update = AsyncMock()
+        agent._conn = mock_conn
+
+        out = await agent.prompt(
+            prompt=[TextContentBlock(type="text", text="hi")], session_id=resp.session_id
+        )
+
+        assert isinstance(out, PromptResponse)
+        assert out.stop_reason == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_prompt_interrupted_none_final_response_without_cancel_returns_end_turn(
+        self, agent, mock_manager
+    ):
+        """Same ``final_response=None`` envelope without an ACP cancel (e.g. an internal
+        interrupt/redirect) resolves ``stop_reason="end_turn"`` — still no raise."""
+        resp = await agent.new_session(cwd=".")
+        state = mock_manager.get_session(resp.session_id)
+        state.agent.run_conversation = MagicMock(
+            return_value={"final_response": None, "interrupted": True, "messages": []}
+        )
+        state.agent.model = "test-model"
+        state.agent.provider = "openrouter"
+        mock_conn = MagicMock(spec=acp.Client)
+        mock_conn.session_update = AsyncMock()
+        agent._conn = mock_conn
+
+        out = await agent.prompt(
+            prompt=[TextContentBlock(type="text", text="hi")], session_id=resp.session_id
+        )
+
+        assert isinstance(out, PromptResponse)
+        assert out.stop_reason == "end_turn"
+
 
 
 
